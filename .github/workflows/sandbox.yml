@@ -1,1 +1,74 @@
+name: LXD Sandbox Probe
 
+on:
+  workflow_dispatch:
+
+jobs:
+  contain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LXD
+        run: |
+          sudo snap install lxd || sudo snap refresh lxd
+          sudo lxd waitready --timeout=120
+          sudo lxd init --auto || true
+
+      - name: Plant canary on host (outside container)
+        run: |
+          sudo mkdir -p /var/tmp/tds-lxd-canary
+          echo 'TDS_LXD_CANARY_f26a6527f77e69316ceb0c423d212b7671ff5174' \
+            | sudo tee /var/tmp/tds-lxd-canary/dca77923520c.txt
+
+      - name: Launch unprivileged container with limits
+        run: |
+          sudo lxc launch ubuntu:24.04 sandbox
+          for i in $(seq 1 30); do
+            if sudo lxc exec sandbox -- test -x /usr/bin/python3; then break; fi
+            sleep 5
+          done
+          sudo lxc config set sandbox security.privileged false
+          sudo lxc config set sandbox security.nesting false
+          sudo lxc config set sandbox limits.memory 512MiB
+          sudo lxc config set sandbox limits.memory.enforce hard
+          sudo lxc config set sandbox limits.memory.swap false
+          sudo lxc config set sandbox limits.cpu 1
+          sudo lxc config set sandbox limits.cpu.allowance 25%
+          sudo lxc config set sandbox limits.processes 200
+
+      - name: Cut network egress
+        run: |
+          sudo lxc config device add sandbox eth0 none
+          sudo lxc restart sandbox
+          sleep 20
+          sudo lxc config device show sandbox
+
+      - name: Run the probe
+        run: |
+          sudo lxc file push probe.sh sandbox/root/probe.sh
+          sudo lxc exec sandbox -- bash /root/probe.sh > sandbox.log 2>&1 || true
+          echo "===================== BEGIN LOG ====================="
+          cat sandbox.log
+          echo "====================== END LOG ======================"
+
+      - name: Verify markers
+        run: |
+          fail=0
+          present() { if grep -q "$1" sandbox.log; then echo "OK present : $1"; else echo "MISSING    : $1"; fail=1; fi; }
+          absent()  { if grep -q "$1" sandbox.log; then echo "LEAK FOUND : $1"; fail=1; else echo "OK absent  : $1"; fi; }
+          present 'LXD_SANDBOX_START token=lxd_f7abbae19339ecaa56900f345f4047c59263e8f27d550422'
+          present 'LXD_SANDBOX_END token=lxd_f7abbae19339ecaa56900f345f4047c59263e8f27d550422'
+          present 'LXD_FS_ATTEMPT'
+          present 'LXD_FS_BLOCKED'
+          present 'LXD_NET_ATTEMPT'
+          present 'LXD_RESOURCE_LIMIT_HIT'
+          absent  'LXD_NET_DONE status=0'
+          absent  'LXD_FS_LEAK_READABLE'
+          absent  'TDS_LXD_CANARY_f26a6527'
+          exit $fail
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-log
+          path: sandbox.log
