@@ -1,7 +1,5 @@
 name: LXD Sandbox Probe
-
-on:
-  workflow_dispatch:
+"on": [push, workflow_dispatch]
 
 jobs:
   contain:
@@ -18,8 +16,7 @@ jobs:
       - name: Plant canary on host (outside container)
         run: |
           sudo mkdir -p /var/tmp/tds-lxd-canary
-          echo 'TDS_LXD_CANARY_f26a6527f77e69316ceb0c423d212b7671ff5174' \
-            | sudo tee /var/tmp/tds-lxd-canary/dca77923520c.txt
+          echo 'TDS_LXD_CANARY_f26a6527f77e69316ceb0c423d212b7671ff5174' | sudo tee /var/tmp/tds-lxd-canary/dca77923520c.txt
 
       - name: Launch unprivileged container with limits
         run: |
@@ -34,7 +31,6 @@ jobs:
           sudo lxc config set sandbox limits.memory.enforce hard
           sudo lxc config set sandbox limits.memory.swap false
           sudo lxc config set sandbox limits.cpu 1
-          sudo lxc config set sandbox limits.cpu.allowance 25%
           sudo lxc config set sandbox limits.processes 200
 
       - name: Cut network egress
